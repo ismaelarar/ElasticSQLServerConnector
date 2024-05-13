@@ -1,0 +1,4 @@
+server = 152.89.164.208,3317
+database = BI
+username = qlik
+password = mipassword!
