@@ -36,9 +36,9 @@ except:
 
 # Crear tabla si no existe
 def crear_tabla(conn, cursor):
-    cursor.execute('''IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='traces')
+    cursor.execute('''IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='traces2')
                         BEGIN
-                            CREATE TABLE traces (
+                            CREATE TABLE traces2 (
                                 id VARCHAR(255) PRIMARY KEY,
                                 Timestamp VARCHAR(255),
                                 IdEmpleado INT,
@@ -56,8 +56,9 @@ def crear_tabla(conn, cursor):
 
 # Funcion para filtar los resultados de elastic a partir de la ultima fecha en la db y esta la opcion --update
 def filtrar(cursor):
-    cursor.execute("SELECT MAX(Timestamp) FROM traces")
+    cursor.execute("SELECT MAX(Timestamp) FROM traces2")
     max_timestamp = cursor.fetchone()[0]
+
 
     json_data = {
         "bool": {
@@ -66,7 +67,7 @@ def filtrar(cursor):
                     "range": {
                         "@timestamp": {
                             "format": "strict_date_optional_time",
-                            "gte": max_timestamp,
+                            "gt": max_timestamp,
                             "lte": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
                         }
                     }
@@ -79,39 +80,38 @@ def filtrar(cursor):
         json.dump(json_data, filtro, indent=4)
 
 # Pasado un batch lo inserta en la base de datos
+
 def insertar_lineas(batch, conn, cursor):
+    
+    query = '''INSERT INTO traces2 (
+                    id,
+                    Timestamp,
+                    IdEmpleado,
+                    Formulario,
+                    IdLicencia,
+                    Mensaje,
+                    IdMaquina,
+                    NetHostname,
+                    Accion,
+                    Servicio
+                ) VALUES '''
+    
+    values = ""
+
     for line in batch:
         data = json.loads(line)
         source_data = data.get('_source', {})
-        _id = data.get('_id', '')
-        if _id:
-            # Verificar si ya existe un registro con el mismo _id
-            cursor.execute("SELECT id FROM traces WHERE id = ?", (_id,))
-            existing_record = cursor.fetchone()
-            if not existing_record:
-                cursor.execute('''INSERT INTO traces (
-                                    id,
-                                    Timestamp,
-                                    IdEmpleado,
-                                    Formulario,
-                                    IdLicencia,
-                                    Mensaje,
-                                    IdMaquina,
-                                    NetHostname,
-                                    Accion,
-                                    Servicio
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                            (data.get('_id', ''),
-                                source_data.get('@timestamp', ''),
-                                source_data.get('Attributes.ahora.eid', ''),
-                                source_data.get('Attributes.ahora.form', ''),
-                                source_data.get('Attributes.ahora.lid', ''),
-                                source_data.get('Attributes.ahora.message', ''),
-                                source_data.get('Attributes.machine.id', ''),
-                                source_data.get('Attributes.net.host.name', ''),
-                                source_data.get('Name', ''),
-                                source_data.get('Resource.service.name', '')))
-            conn.commit()
+        values += f'''('{data.get('_id')}', '{source_data.get('@timestamp', '')}', '{source_data.get('Attributes.ahora.eid', '')}', '{source_data.get('Attributes.ahora.form', '')}', '{source_data.get('Attributes.ahora.lid', '')}', '{source_data.get('Attributes.ahora.message', '').replace("'", "")}', '{source_data.get('Attributes.machine.id', '')}', '{source_data.get('Attributes.net.host.name', '')}', '{source_data.get('Name', '')}', '{source_data.get('Resource.service.name', '')}'),\n'''
+
+    query += values[:-2]
+
+    
+    try:
+        cursor.execute(query)
+    except:
+        print("Saltando")
+    
+    conn.commit()
 
 #---------------------------
 # --- FUNCIONES NO TOCAR ---
@@ -181,21 +181,18 @@ def ndjson_to_sqlserver(input_file):
     with open(input_file, 'r', encoding='utf-8') as f:
 
         lineas = f.readlines() #lineas totales
-        
-        is_pocas = len(lineas) < 1000
-        batch_size = len(lineas) if is_pocas else 100 # Intervalo de insercion para no colapsar pero si son pocas lineas las hace todas seguidas
 
         print("Insertando " + str(len(lineas)) + " registros en la BD")
         # Si queremos añadir a partir de la ultima fila de la base de datos update debe ser True
-        for i in range(0, len(lineas), batch_size):
 
-            batch = lineas[i:i+batch_size]
-
-            if not is_pocas:
-                print(str(len(batch)) + " lineas leidas, siguiendo...")
-            
+        leidas = 0
+        for i in range(0, len(lineas), 1000):
+            i += 1
+            batch = lineas[i:i+1000]
             insertar_lineas(batch, conn, cursor)
-            time.sleep(0.1)  
+            leidas += len(batch)
+            print(str(leidas) + " lineas leidas, siguiendo...")
+            time.sleep(0.2)
 
     #conn.close()
 
@@ -231,4 +228,4 @@ while True:
 
     print("Volviendo a ejecutar en un rato...")
     print("-----------------------------------------------------------\n\n")
-    time.sleep(300)
+    time.sleep(600)
